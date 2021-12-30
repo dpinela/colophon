@@ -4,6 +4,7 @@ import (
 	"encoding/xml"
 	"fmt"
 	"net/http"
+	"strings"
 )
 
 type modLinks struct {
@@ -38,6 +39,11 @@ func Get() ([]Manifest, error) {
 	var links modLinks
 	if err := xml.NewDecoder(resp.Body).Decode(&links); err != nil {
 		return nil, wrap(err)
+	}
+	// The Link field has some extra indentation inside it; discard it.
+	for i := range links.Manifests {
+		m := &links.Manifests[i]
+		m.Link.URL = strings.TrimSpace(m.Link.URL)
 	}
 	return links.Manifests, nil
 }
