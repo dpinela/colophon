@@ -47,3 +47,49 @@ func Get() ([]Manifest, error) {
 	}
 	return links.Manifests, nil
 }
+
+type missingModsError []string
+
+func (err missingModsError) Error() string {
+	return fmt.Sprintf("required mods do not exist: %s", strings.Join(err, ","))
+}
+
+func TransitiveClosure(allModlinks []Manifest, mods []string) ([]Manifest, error) {
+	modsByName := make(map[string]*Manifest, len(allModlinks))
+	for i := range allModlinks {
+		modsByName[allModlinks[i].Name] = &allModlinks[i]
+	}
+	resultSet := map[string]*Manifest{}
+	missingModSet := map[string]bool{}
+	for _, name := range mods {
+		transitiveClosure(modsByName, resultSet, missingModSet, name)
+	}
+	result := make([]Manifest, 0, len(resultSet))
+	for _, mod := range resultSet {
+		result = append(result, *mod)
+	}
+	missing := make(missingModsError, 0, len(missingModSet))
+	for name := range missingModSet {
+		missing = append(missing, name)
+	}
+	var err error
+	if len(missing) > 0 {
+		err = missing 
+	}
+	return result, err
+}
+
+func transitiveClosure(modsByName, resultSet map[string]*Manifest, missingMods map[string]bool, modName string) {
+	if _, ok := resultSet[modName]; ok {
+		return
+	}
+	mod, ok := modsByName[modName]
+	if !ok {
+		missingMods[modName] = true
+		return
+	}
+	resultSet[modName] = mod
+	for _, dep := range mod.Dependencies {
+		transitiveClosure(modsByName, resultSet, missingMods, dep)
+	}
+}

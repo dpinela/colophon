@@ -21,6 +21,8 @@ func main() {
 	switch subcmd {
 	case "list":
 		err = list(os.Args[2:])
+	case "download":
+		err = download(os.Args[2:])
 	default:
 		err = fmt.Errorf("unknown subcommand: %q", subcmd)
 	}
@@ -28,6 +30,23 @@ func main() {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
+}
+
+func download(mods []string) error {
+	manifests, err := modlinks.Get()
+	if err != nil {
+		return err
+	}
+	downloads, err := modlinks.TransitiveClosure(manifests, mods)
+	if err != nil {
+		return err
+	}
+	sort.Slice(downloads, func(i, j int) bool { return downloads[i].Name < downloads[j].Name })
+	for _, dl := range downloads {
+		fmt.Println("Installing", dl.Name)
+		fmt.Println("Downloading", dl.Link.URL)
+	}
+	return nil
 }
 
 func list(args []string) error {
