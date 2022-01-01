@@ -10,6 +10,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"path"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -53,6 +54,12 @@ func download(mods []string) error {
 		return err
 	}
 	for _, dl := range downloads {
+		// There's no way we can reasonably install a mod whose name contains a path separator.
+		// This also avoids any path traversal vulnerabilities from mod names.
+		if strings.ContainsRune(dl.Name, filepath.Separator) {
+			fmt.Printf("cannot install %s, contains path separator\n", dl.Name)
+			continue
+		}
 		fmt.Println("Installing", dl.Name)
 		fmt.Println("Downloading", dl.Link.URL)
 		file, err := downloadLink(dl.Link)
@@ -61,7 +68,21 @@ func download(mods []string) error {
 			continue
 		}
 		fmt.Println("Extracting", dl.Name)
-		if err := extractMod(file, dl.Name, installdir); err != nil {
+		if err := removePreviousVersion(dl.Name, installdir); err != nil {
+			fmt.Println(err)
+			continue
+		}
+		if path.Ext(dl.Link.URL) == ".zip" {
+			err = extractModZip(file, dl.Name, installdir)
+		} else {
+			filename := path.Base(dl.Link.URL)
+			if strings.ContainsRune(filename, filepath.Separator) {
+				fmt.Printf("cannot install %s, filename %s contains path separator\n", dl.Name, filename)
+				continue
+			}
+			err = extractModDLL(file, filename, dl.Name, installdir)
+		}
+		if err != nil {
 			fmt.Println(err)
 		}
 	}
@@ -93,7 +114,15 @@ func downloadLink(link modlinks.Link) (*bytes.Reader, error) {
 	return bytes.NewReader(buf), nil
 }
 
-func extractMod(zipfile *bytes.Reader, name, installdir string) error {
+func removePreviousVersion(name, installdir string) error {
+	err := os.RemoveAll(filepath.Join(installdir, "Mods", name))
+	if err == nil || os.IsNotExist(err) {
+		return nil
+	}
+	return fmt.Errorf("remove previous version of %s: %w", name, err)
+}
+
+func extractModZip(zipfile *bytes.Reader, name, installdir string) error {
 	wrap := func(err error) error { return fmt.Errorf("extract mod %s: %w", name, err) }
 	archive, err := zip.NewReader(zipfile, zipfile.Size())
 	if err != nil {
@@ -106,6 +135,27 @@ func extractMod(zipfile *bytes.Reader, name, installdir string) error {
 		if err := writeZipFile(dest, file); err != nil {
 			return wrap(err)
 		}
+	}
+	return nil
+}
+
+func extractModDLL(dllfile *bytes.Reader, filename, modname, installdir string) error {
+	wrap := func(err error) error { return fmt.Errorf("extract mod %s: %w", modname, err) }
+	dest := filepath.Join(installdir, "Mods", modname, filename)
+	if err := os.MkdirAll(filepath.Dir(dest), 0750); err != nil {
+		return wrap(err)
+	}
+	w, err := os.Create(dest)
+	if err != nil {
+		return wrap(err)
+	}
+	_, err = io.Copy(w, dllfile)
+	if err != nil {
+		w.Close()
+		return wrap(err)
+	}
+	if err := w.Close(); err != nil {
+		return wrap(err)
 	}
 	return nil
 }
