@@ -49,7 +49,27 @@ func download(mods []string) error {
 	if err != nil {
 		return err
 	}
-	downloads, err := modlinks.TransitiveClosure(manifests, mods)
+	modPatterns := make([]*regexp.Regexp, len(mods))
+	for i, m := range mods {
+		modPatterns[i], err = regexp.Compile("(?i)" + regexp.QuoteMeta(m))
+		if err != nil {
+			return err
+		}
+	}
+	resolvedMods := make([]string, 0, len(mods))
+	for i, p := range modPatterns {
+		ms := findMatchingMods(manifests, p)
+		if len(ms) == 0 {
+			fmt.Printf("%q matches no mods\n", mods[i])
+			continue
+		}
+		if len(ms) > 1 {
+			fmt.Printf("%q is ambiguous: matches %s\n", mods[i], strings.Join(ms, ", "))
+			continue
+		}
+		resolvedMods = append(resolvedMods, ms[0])
+	}
+	downloads, err := modlinks.TransitiveClosure(manifests, resolvedMods)
 	if err != nil {
 		return err
 	}
@@ -87,6 +107,16 @@ func download(mods []string) error {
 		}
 	}
 	return nil
+}
+
+func findMatchingMods(ms []modlinks.Manifest, p *regexp.Regexp) []string {
+	var matched []string
+	for _, m := range ms {
+		if p.MatchString(m.Name) {
+			matched = append(matched, m.Name)
+		}
+	}
+	return matched
 }
 
 func downloadLink(link modlinks.Link) (*bytes.Reader, error) {
