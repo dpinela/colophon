@@ -21,7 +21,8 @@ import (
 
 func main() {
 	if len(os.Args) < 2 {
-		fmt.Printf("usage: %s {list}\n", os.Args[0])
+		fmt.Printf("usage: %s list [-s search] [-d]\n", os.Args[0])
+		fmt.Printf("       %s install modnames [...]\n", os.Args[0])
 		os.Exit(2)
 	}
 	subcmd := os.Args[1]
@@ -29,8 +30,8 @@ func main() {
 	switch subcmd {
 	case "list":
 		err = list(os.Args[2:])
-	case "download":
-		err = download(os.Args[2:])
+	case "install":
+		err = install(os.Args[2:])
 	default:
 		err = fmt.Errorf("unknown subcommand: %q", subcmd)
 	}
@@ -40,7 +41,7 @@ func main() {
 	}
 }
 
-func download(mods []string) error {
+func install(mods []string) error {
 	installdir := os.Getenv("HK15PATH")
 	if installdir == "" {
 		return fmt.Errorf("HK15PATH not defined")
