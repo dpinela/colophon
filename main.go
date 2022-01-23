@@ -46,6 +46,12 @@ func install(mods []string) error {
 	if installdir == "" {
 		return fmt.Errorf("HK15PATH not defined")
 	}
+	cachedir, err := os.UserCacheDir()
+	if err != nil {
+		fmt.Println("cache directory not available:", err)
+	} else {
+		cachedir = filepath.Join(cachedir, "hkmod")
+	}
 	manifests, err := modlinks.Get()
 	if err != nil {
 		return err
@@ -78,12 +84,15 @@ func install(mods []string) error {
 		// There's no way we can reasonably install a mod whose name contains a path separator.
 		// This also avoids any path traversal vulnerabilities from mod names.
 		if strings.ContainsRune(dl.Name, filepath.Separator) {
-			fmt.Printf("cannot install %s, contains path separator\n", dl.Name)
+			fmt.Printf("cannot install %s: contains path separator\n", dl.Name)
+			continue
+		}
+		if strings.ContainsRune(path.Base(dl.Link.URL), filepath.Separator) {
+			fmt.Printf("cannot install %s: filename contains path separator\n", dl.Name)
 			continue
 		}
 		fmt.Println("Installing", dl.Name)
-		fmt.Println("Downloading", dl.Link.URL)
-		file, err := downloadLink(dl.Link)
+		file, size, err := getModFile(cachedir, &dl)
 		if err != nil {
 			fmt.Println(err)
 			continue
@@ -94,14 +103,9 @@ func install(mods []string) error {
 			continue
 		}
 		if path.Ext(dl.Link.URL) == ".zip" {
-			err = extractModZip(file, dl.Name, installdir)
+			err = extractModZip(file, size, dl.Name, installdir)
 		} else {
-			filename := path.Base(dl.Link.URL)
-			if strings.ContainsRune(filename, filepath.Separator) {
-				fmt.Printf("cannot install %s, filename %s contains path separator\n", dl.Name, filename)
-				continue
-			}
-			err = extractModDLL(file, filename, dl.Name, installdir)
+			err = extractModDLL(file, path.Base(dl.Link.URL), dl.Name, installdir)
 		}
 		if err != nil {
 			fmt.Println(err)
@@ -120,32 +124,73 @@ func findMatchingMods(ms []modlinks.Manifest, p *regexp.Regexp) []string {
 	return matched
 }
 
-func downloadLink(link modlinks.Link) (*bytes.Reader, error) {
-	wrap := func(err error) error { return fmt.Errorf("download %s: %w", link.URL, err) }
-	expectedSHA, err := hex.DecodeString(link.SHA256)
+type readCloserAt interface {
+	io.ReaderAt
+	io.ReadSeekCloser
+}
+
+func getModFile(cachedir string, mod *modlinks.Manifest) (readCloserAt, int64, error) {
+	expectedSHA, err := hex.DecodeString(mod.Link.SHA256)
 	if err != nil {
-		return nil, wrap(err)
+		return nil, 0, err
 	}
-	resp, err := http.Get(link.URL)
+	cacheEntry := filepath.Join(cachedir, mod.Name + path.Ext(mod.Link.URL))
+	f, err := os.Open(cacheEntry)
+	if os.IsNotExist(err) {
+		return downloadLink(cacheEntry, mod.Link.URL, expectedSHA)
+	}
 	if err != nil {
-		return nil, wrap(err)
+		return nil, 0, err
+	}
+	sha := sha256.New()
+	size, err := io.Copy(sha, f)
+	if err != nil {
+		f.Close()
+		return nil, 0, err
+	}
+	if !bytes.Equal(expectedSHA, sha.Sum(make([]byte, 0, sha256.Size))) {
+		f.Close()
+		return downloadLink(cacheEntry, mod.Link.URL, expectedSHA)
+	}
+	fmt.Println("Got", mod.Name, "from cache")
+	return f, size, nil
+}
+
+func downloadLink(localfile string, url string, expectedSHA []byte) (readCloserAt, int64, error) {
+	fmt.Println("Downloading", url)
+	wrap := func(err error) error { return fmt.Errorf("download %s: %w", url, err) }
+	resp, err := http.Get(url)
+	if err != nil {
+		return nil, 0, wrap(err)
 	}
 	defer resp.Body.Close()
 	if !(resp.StatusCode >= 200 && resp.StatusCode < 300) {
-		return nil, fmt.Errorf("download %s: response status was %d", link.URL, resp.StatusCode)
+		return nil, 0, fmt.Errorf("download %s: response status was %d", url, resp.StatusCode)
+	}
+	if err := os.MkdirAll(filepath.Dir(localfile), 0750); err != nil {
+		return nil, 0, wrap(err)
+	}
+	f, err := os.Create(localfile)
+	if err != nil {
+		return nil, 0, wrap(err)
 	}
 	sha := sha256.New()
-	buf, err := io.ReadAll(io.TeeReader(resp.Body, sha))
+	size, err := io.Copy(f, io.TeeReader(resp.Body, sha))
 	if err != nil {
-		return nil, wrap(err)
+		f.Close()
+		return nil, 0, wrap(err)
 	}
 	if !bytes.Equal(sha.Sum(make([]byte, 0, sha256.Size)), expectedSHA) {
-		return nil, fmt.Errorf("download %s: sha256 does not match manifest", link.URL)
+		return nil, 0, fmt.Errorf("download %s: sha256 does not match manifest", url)
 	}
-	return bytes.NewReader(buf), nil
+	return f, size, nil
 }
 
 func removePreviousVersion(name, installdir string) error {
+	// Keep existing skins while reinstalling Custom Knight.
+	if name == "Custom Knight" {
+		return removePreviousDLLs(name, installdir)
+	}
 	err := os.RemoveAll(filepath.Join(installdir, "Mods", name))
 	if err == nil || os.IsNotExist(err) {
 		return nil
@@ -153,9 +198,33 @@ func removePreviousVersion(name, installdir string) error {
 	return fmt.Errorf("remove previous version of %s: %w", name, err)
 }
 
-func extractModZip(zipfile *bytes.Reader, name, installdir string) error {
+func removePreviousDLLs(name, installdir string) error {
+	moddir := filepath.Join(installdir, "Mods", name)
+	dir, err := os.Open(moddir)
+	if os.IsNotExist(err) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	defer dir.Close()
+	entries, err := dir.ReadDir(-1)
+	if err != nil {
+		return err
+	}
+	for _, e := range entries {
+		if !e.IsDir() && filepath.Ext(e.Name()) == ".dll" {
+			if err := os.Remove(filepath.Join(moddir, e.Name())); err != nil {
+				fmt.Println("warning:", err)
+			}
+		}
+	}
+	return nil
+}
+
+func extractModZip(zipfile io.ReaderAt, size int64, name, installdir string) error {
 	wrap := func(err error) error { return fmt.Errorf("extract mod %s: %w", name, err) }
-	archive, err := zip.NewReader(zipfile, zipfile.Size())
+	archive, err := zip.NewReader(zipfile, size)
 	if err != nil {
 		return wrap(err)
 	}
@@ -163,17 +232,25 @@ func extractModZip(zipfile *bytes.Reader, name, installdir string) error {
 		// Prevent us from accidentally (or not so accidentally, in case of a malicious input)
 		// from writing outside the destination directory.
 		dest := filepath.Join(installdir, "Mods", name, filepath.Join(string(filepath.Separator), filepath.FromSlash(file.Name)))
-		if err := writeZipFile(dest, file); err != nil {
+		if strings.HasSuffix(file.Name, "/") {
+			err = os.MkdirAll(dest, 0750)
+		} else {
+			err = writeZipFile(dest, file)
+		}
+		if err != nil {
 			return wrap(err)
 		}
 	}
 	return nil
 }
 
-func extractModDLL(dllfile *bytes.Reader, filename, modname, installdir string) error {
+func extractModDLL(dllfile io.ReadSeeker, filename, modname, installdir string) error {
 	wrap := func(err error) error { return fmt.Errorf("extract mod %s: %w", modname, err) }
 	dest := filepath.Join(installdir, "Mods", modname, filename)
 	if err := os.MkdirAll(filepath.Dir(dest), 0750); err != nil {
+		return wrap(err)
+	}
+	if _, err := dllfile.Seek(0, io.SeekStart); err != nil {
 		return wrap(err)
 	}
 	w, err := os.Create(dest)
