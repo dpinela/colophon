@@ -48,10 +48,9 @@ func install(mods []string) error {
 	}
 	cachedir, err := os.UserCacheDir()
 	if err != nil {
-		fmt.Println("cache directory not available:", err)
-	} else {
-		cachedir = filepath.Join(cachedir, "hkmod")
+		return fmt.Errorf("cache directory not available: %w", err)
 	}
+	cachedir = filepath.Join(cachedir, "hkmod")
 	manifests, err := modlinks.Get()
 	if err != nil {
 		return err
