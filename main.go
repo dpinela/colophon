@@ -22,7 +22,7 @@ import (
 func main() {
 	if len(os.Args) < 2 {
 		fmt.Printf("usage: %s list [-s search] [-d]\n", os.Args[0])
-		fmt.Printf("       %s install modnames [...]\n", os.Args[0])
+		fmt.Printf("       %s install [-e] modnames [...]\n", os.Args[0])
 		os.Exit(2)
 	}
 	subcmd := os.Args[1]
@@ -41,7 +41,7 @@ func main() {
 	}
 }
 
-func install(mods []string) error {
+func install(args []string) error {
 	installdir := os.Getenv("HK15PATH")
 	if installdir == "" {
 		return fmt.Errorf("HK15PATH not defined")
@@ -51,30 +51,49 @@ func install(mods []string) error {
 		return fmt.Errorf("cache directory not available: %w", err)
 	}
 	cachedir = filepath.Join(cachedir, "hkmod")
+
+	var exactMatch bool
+	flags := flag.NewFlagSet("install", flag.ExitOnError)
+	flags.BoolVar(&exactMatch, "e", false, "Match mod names exactly (case-sensitive)")
+	flags.Parse(args)
+	mods := flags.Args()
+
 	manifests, err := modlinks.Get()
 	if err != nil {
 		return err
 	}
-	modPatterns := make([]*regexp.Regexp, len(mods))
-	for i, m := range mods {
-		modPatterns[i], err = regexp.Compile("(?i)" + regexp.QuoteMeta(m))
-		if err != nil {
-			return err
-		}
-	}
 	resolvedMods := make([]string, 0, len(mods))
-	for i, p := range modPatterns {
-		ms := findMatchingMods(manifests, p)
-		if len(ms) == 0 {
-			fmt.Printf("%q matches no mods\n", mods[i])
-			continue
+	if exactMatch {
+		for _, m := range mods {
+			if findExactMod(manifests, m) {
+				resolvedMods = append(resolvedMods, m)
+			} else {
+				fmt.Printf("mod %q does not exist\n", m)
+			}
 		}
-		if len(ms) > 1 {
-			fmt.Printf("%q is ambiguous: matches %s\n", mods[i], strings.Join(ms, ", "))
-			continue
+	} else {
+		modPatterns := make([]*regexp.Regexp, len(mods))
+		for i, m := range mods {
+			modPatterns[i], err = regexp.Compile("(?i)" + regexp.QuoteMeta(m))
+			if err != nil {
+				return err
+			}
 		}
-		resolvedMods = append(resolvedMods, ms[0])
+	
+		for i, p := range modPatterns {
+			ms := findMatchingMods(manifests, p)
+			if len(ms) == 0 {
+				fmt.Printf("%q matches no mods\n", mods[i])
+				continue
+			}
+			if len(ms) > 1 {
+				fmt.Printf("%q is ambiguous: matches %s\n", mods[i], strings.Join(ms, ", "))
+				continue
+			}
+			resolvedMods = append(resolvedMods, ms[0])
+		}
 	}
+	
 	downloads, err := modlinks.TransitiveClosure(manifests, resolvedMods)
 	if err != nil {
 		return err
@@ -121,6 +140,15 @@ func findMatchingMods(ms []modlinks.Manifest, p *regexp.Regexp) []string {
 		}
 	}
 	return matched
+}
+
+func findExactMod(ms []modlinks.Manifest, name string) bool {
+	for _, m := range ms {
+		if m.Name == name {
+			return true
+		}
+	}
+	return false
 }
 
 type readCloserAt interface {
