@@ -15,6 +15,7 @@ type Manifest struct {
 	Name         string
 	Description  string
 	Version      string
+	Repository   string
 	Link         Link
 	Dependencies []string `xml:"Dependencies>Dependency"`
 }
@@ -40,10 +41,11 @@ func Get() ([]Manifest, error) {
 	if err := xml.NewDecoder(resp.Body).Decode(&links); err != nil {
 		return nil, wrap(err)
 	}
-	// The Link field has some extra indentation inside it; discard it.
+	// The Link and Repository fields have some extra indentation inside them; discard it.
 	for i := range links.Manifests {
 		m := &links.Manifests[i]
 		m.Link.URL = strings.TrimSpace(m.Link.URL)
+		m.Repository = strings.TrimSpace(m.Repository)
 	}
 	return links.Manifests, nil
 }
@@ -74,7 +76,7 @@ func TransitiveClosure(allModlinks []Manifest, mods []string) ([]Manifest, error
 	}
 	var err error
 	if len(missing) > 0 {
-		err = missing 
+		err = missing
 	}
 	return result, err
 }

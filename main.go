@@ -358,6 +358,7 @@ func list(args []string) error {
 		fmt.Println(m.Name)
 		if detailed {
 			fmt.Println("\tVersion:", m.Version)
+			fmt.Println("\tRepository:", m.Repository)
 			deps := "none"
 			if len(m.Dependencies) > 0 {
 				deps = strings.Join(m.Dependencies, ", ")
