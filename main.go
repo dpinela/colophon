@@ -22,7 +22,7 @@ import (
 func main() {
 	if len(os.Args) < 2 {
 		fmt.Printf("usage: %s list [-s search] [-d]\n", os.Args[0])
-		fmt.Printf("       %s install [-e] modnames [...]\n", os.Args[0])
+		fmt.Printf("       %s install modnames [...]\n", os.Args[0])
 		os.Exit(2)
 	}
 	subcmd := os.Args[1]
@@ -52,46 +52,18 @@ func install(args []string) error {
 	}
 	cachedir = filepath.Join(cachedir, "hkmod")
 
-	var exactMatch bool
-	flags := flag.NewFlagSet("install", flag.ExitOnError)
-	flags.BoolVar(&exactMatch, "e", false, "Match mod names exactly (case-sensitive)")
-	flags.Parse(args)
-	mods := flags.Args()
-
 	manifests, err := modlinks.Get()
 	if err != nil {
 		return err
 	}
-	resolvedMods := make([]string, 0, len(mods))
-	if exactMatch {
-		for _, m := range mods {
-			if findExactMod(manifests, m) {
-				resolvedMods = append(resolvedMods, m)
-			} else {
-				fmt.Printf("mod %q does not exist\n", m)
-			}
+	resolvedMods := make([]string, 0, len(args))
+	for _, requestedName := range args {
+		mod, err := resolveMod(manifests, requestedName)
+		if err != nil {
+			fmt.Println(err)
+			continue
 		}
-	} else {
-		modPatterns := make([]*regexp.Regexp, len(mods))
-		for i, m := range mods {
-			modPatterns[i], err = regexp.Compile("(?i)" + regexp.QuoteMeta(m))
-			if err != nil {
-				return err
-			}
-		}
-	
-		for i, p := range modPatterns {
-			ms := findMatchingMods(manifests, p)
-			if len(ms) == 0 {
-				fmt.Printf("%q matches no mods\n", mods[i])
-				continue
-			}
-			if len(ms) > 1 {
-				fmt.Printf("%q is ambiguous: matches %s\n", mods[i], strings.Join(ms, ", "))
-				continue
-			}
-			resolvedMods = append(resolvedMods, ms[0])
-		}
+		resolvedMods = append(resolvedMods, mod)
 	}
 	
 	downloads, err := modlinks.TransitiveClosure(manifests, resolvedMods)
@@ -132,23 +104,71 @@ func install(args []string) error {
 	return nil
 }
 
-func findMatchingMods(ms []modlinks.Manifest, p *regexp.Regexp) []string {
-	var matched []string
-	for _, m := range ms {
-		if p.MatchString(m.Name) {
-			matched = append(matched, m.Name)
-		}
-	}
-	return matched
+type unknownModError struct { requestedName string }
+
+func (err *unknownModError) Error() string { return fmt.Sprintf("%q matches no mods", err.requestedName) }
+
+type ambiguousModError struct {
+	requestedName string
+	possibilities []string
 }
 
-func findExactMod(ms []modlinks.Manifest, name string) bool {
+func (err *ambiguousModError) Error() string { return fmt.Sprintf("%q is ambiguous: matches %s", err.requestedName, strings.Join(err.possibilities, ", ")) }
+
+type duplicateModError struct {
+	requestedName string
+	numMatches int
+}
+
+func (err *duplicateModError) Error() string { return fmt.Sprintf("%q is ambiguous: %d mods with that exact name exist", err.requestedName, err.numMatches) }
+
+func resolveMod(ms []modlinks.Manifest, requestedName string) (string, error) {
+	pattern, err := regexp.Compile("(?i)" + regexp.QuoteMeta(requestedName))
+	if err != nil {
+		return "", err
+	}
+	var matches []string
 	for _, m := range ms {
-		if m.Name == name {
-			return true
+		if pattern.MatchString(m.Name) {
+			matches = append(matches, m.Name)
 		}
 	}
-	return false
+	switch len(matches) {
+	case 1:
+		return matches[0], nil
+	case 0:
+		return "", &unknownModError{requestedName}
+	}
+
+	fullMatches := matches[:0]
+	for _, m := range matches {
+		if strings.EqualFold(m, requestedName) {
+			fullMatches = append(fullMatches, m)
+		}
+	}
+	switch len(fullMatches) {
+	case 1:
+		return fullMatches[0], nil
+	case 0:
+		// If fullMatches is empty, the previous loop never appended to it, so the contents of
+		// the matches slice are intact.
+		return "", &ambiguousModError{requestedName, matches}
+	}
+
+	numExactMatches := 0
+	for _, m := range fullMatches {
+		if m == requestedName {
+			numExactMatches++
+		}
+	}
+	switch numExactMatches {
+	case 1:
+		return requestedName, nil
+	case 0:
+		return "", &ambiguousModError{requestedName, fullMatches}
+	default:
+		return "", &duplicateModError{requestedName, numExactMatches}
+	}
 }
 
 type readCloserAt interface {
