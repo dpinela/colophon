@@ -23,6 +23,7 @@ func main() {
 	if len(os.Args) < 2 {
 		fmt.Printf("usage: %s list [-s search] [-d]\n", os.Args[0])
 		fmt.Printf("       %s install modnames [...]\n", os.Args[0])
+		fmt.Printf("       %s installfile modname path-or-url", os.Args[0])
 		os.Exit(2)
 	}
 	subcmd := os.Args[1]
@@ -32,6 +33,8 @@ func main() {
 		err = list(os.Args[2:])
 	case "install":
 		err = install(os.Args[2:])
+	case "installfile":
+		err = installfile(os.Args[2:])
 	default:
 		err = fmt.Errorf("unknown subcommand: %q", subcmd)
 	}
@@ -65,7 +68,7 @@ func install(args []string) error {
 		}
 		resolvedMods = append(resolvedMods, mod)
 	}
-	
+
 	downloads, err := modlinks.TransitiveClosure(manifests, resolvedMods)
 	if err != nil {
 		return err
@@ -90,6 +93,7 @@ func install(args []string) error {
 		fmt.Println("Extracting", dl.Name)
 		if err := removePreviousVersion(dl.Name, installdir); err != nil {
 			fmt.Println(err)
+			file.Close()
 			continue
 		}
 		if path.Ext(dl.Link.URL) == ".zip" {
@@ -97,6 +101,7 @@ func install(args []string) error {
 		} else {
 			err = extractModDLL(file, path.Base(dl.Link.URL), dl.Name, installdir)
 		}
+		file.Close()
 		if err != nil {
 			fmt.Println(err)
 		}
@@ -104,23 +109,76 @@ func install(args []string) error {
 	return nil
 }
 
-type unknownModError struct { requestedName string }
+func installfile(args []string) error {
+	installdir := os.Getenv("HK15PATH")
+	if installdir == "" {
+		return fmt.Errorf("HK15PATH not defined")
+	}
+	if len(args) < 2 {
+		return fmt.Errorf("usage: installfile modname path-or-url")
+	}
+	name := args[0]
+	source := args[1]
+	var file interface {
+		io.ReadSeeker
+		io.ReaderAt
+	}
+	var size int64
+	if regexp.MustCompile("^https?://").MatchString(source) {
+		resp, err := http.Get(source)
+		if err != nil {
+			return fmt.Errorf("download %s: %w", source, err)
+		}
+		content, err := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if err != nil {
+			return fmt.Errorf("download %s: %w", source, err)
+		}
+		size = int64(len(content))
+		file = bytes.NewReader(content)
+	} else {
+		f, err := os.Open(source)
+		if err != nil {
+			return err
+		}
+		defer f.Close()
+		info, err := f.Stat()
+		if err != nil {
+			return err
+		}
+		size = info.Size()
+		file = f
+	}
+	if path.Ext(source) == ".zip" {
+		return extractModZip(file, size, name, installdir)
+	} else {
+		return extractModDLL(file, path.Base(source), name, installdir)
+	}
+}
 
-func (err *unknownModError) Error() string { return fmt.Sprintf("%q matches no mods", err.requestedName) }
+type unknownModError struct{ requestedName string }
+
+func (err *unknownModError) Error() string {
+	return fmt.Sprintf("%q matches no mods", err.requestedName)
+}
 
 type ambiguousModError struct {
 	requestedName string
 	possibilities []string
 }
 
-func (err *ambiguousModError) Error() string { return fmt.Sprintf("%q is ambiguous: matches %s", err.requestedName, strings.Join(err.possibilities, ", ")) }
+func (err *ambiguousModError) Error() string {
+	return fmt.Sprintf("%q is ambiguous: matches %s", err.requestedName, strings.Join(err.possibilities, ", "))
+}
 
 type duplicateModError struct {
 	requestedName string
-	numMatches int
+	numMatches    int
 }
 
-func (err *duplicateModError) Error() string { return fmt.Sprintf("%q is ambiguous: %d mods with that exact name exist", err.requestedName, err.numMatches) }
+func (err *duplicateModError) Error() string {
+	return fmt.Sprintf("%q is ambiguous: %d mods with that exact name exist", err.requestedName, err.numMatches)
+}
 
 func resolveMod(ms []modlinks.Manifest, requestedName string) (string, error) {
 	pattern, err := regexp.Compile("(?i)" + regexp.QuoteMeta(requestedName))
@@ -181,7 +239,7 @@ func getModFile(cachedir string, mod *modlinks.Manifest) (readCloserAt, int64, e
 	if err != nil {
 		return nil, 0, err
 	}
-	cacheEntry := filepath.Join(cachedir, mod.Name + path.Ext(mod.Link.URL))
+	cacheEntry := filepath.Join(cachedir, mod.Name+path.Ext(mod.Link.URL))
 	f, err := os.Open(cacheEntry)
 	if os.IsNotExist(err) {
 		return downloadLink(cacheEntry, mod.Link.URL, expectedSHA)
