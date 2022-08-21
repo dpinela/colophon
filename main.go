@@ -24,6 +24,7 @@ func main() {
 		fmt.Printf("usage: %s list [-s search] [-d]\n", os.Args[0])
 		fmt.Printf("       %s install modnames [...]\n", os.Args[0])
 		fmt.Printf("       %s installfile modname path-or-url", os.Args[0])
+		fmt.Printf("       %s yeet modnames [...]\n", os.Args[0])
 		os.Exit(2)
 	}
 	subcmd := os.Args[1]
@@ -35,6 +36,8 @@ func main() {
 		err = install(os.Args[2:])
 	case "installfile":
 		err = installfile(os.Args[2:])
+	case "yeet":
+		err = yeet(os.Args[2:])
 	default:
 		err = fmt.Errorf("unknown subcommand: %q", subcmd)
 	}
@@ -181,14 +184,22 @@ func (err *duplicateModError) Error() string {
 }
 
 func resolveMod(ms []modlinks.Manifest, requestedName string) (string, error) {
+	names := make([]string, len(ms))
+	for i, m := range ms {
+		names[i] = m.Name
+	}
+	return resolveModName(names, requestedName)
+}
+
+func resolveModName(ms []string, requestedName string) (string, error) {
 	pattern, err := regexp.Compile("(?i)" + regexp.QuoteMeta(requestedName))
 	if err != nil {
 		return "", err
 	}
 	var matches []string
 	for _, m := range ms {
-		if pattern.MatchString(m.Name) {
-			matches = append(matches, m.Name)
+		if pattern.MatchString(m) {
+			matches = append(matches, m)
 		}
 	}
 	switch len(matches) {
@@ -291,16 +302,18 @@ func downloadLink(localfile string, url string, expectedSHA []byte) (readCloserA
 	return f, size, nil
 }
 
+const customKnightName = "Custom Knight"
+
 func removePreviousVersion(name, installdir string) error {
 	// Keep existing skins while reinstalling Custom Knight.
-	if name == "Custom Knight" {
+	if name == customKnightName {
 		return removePreviousDLLs(name, installdir)
 	}
 	err := os.RemoveAll(filepath.Join(installdir, "Mods", name))
 	if err == nil || os.IsNotExist(err) {
 		return nil
 	}
-	return fmt.Errorf("remove previous version of %s: %w", name, err)
+	return fmt.Errorf("yeet installed version of %s: %w", name, err)
 }
 
 func removePreviousDLLs(name, installdir string) error {
@@ -446,4 +459,59 @@ func list(args []string) error {
 		}
 	}
 	return nil
+}
+
+func yeet(args []string) error {
+	installdir := os.Getenv("HK15PATH")
+	if installdir == "" {
+		return fmt.Errorf("HK15PATH not defined")
+	}
+	modsdir := filepath.Join(installdir, "Mods")
+	mods, err := installedMods(modsdir)
+	if err != nil {
+		return err
+	}
+	modsToDelete := map[string]struct{}{}
+	for _, arg := range args {
+		resolved, err := resolveModName(mods, arg)
+		if err != nil {
+			fmt.Println(err)
+			continue
+		}
+		modsToDelete[resolved] = struct{}{}
+	}
+	for mod := range modsToDelete {
+		if err := removePreviousVersion(mod, installdir); err != nil {
+			fmt.Println(err)
+		} else if mod == customKnightName {
+			fmt.Println("Yeeted", mod, "(installed skins kept)")
+		} else {
+			fmt.Println("Yeeted", mod)
+		}
+	}
+	return nil
+}
+
+func installedMods(modsdir string) ([]string, error) {
+	wrap := func(err error) error {
+		return fmt.Errorf("list installed mods: %w", err)
+	}
+
+	dir, err := os.Open(modsdir)
+	if err != nil {
+		return nil, wrap(err)
+	}
+	entries, err := dir.ReadDir(0)
+	dir.Close()
+	if err != nil {
+		return nil, wrap(err)
+	}
+	// We expect almost all of the entries in the Mods directory to be actual mods.
+	modnames := make([]string, 0, len(entries))
+	for _, e := range entries {
+		if e.IsDir() && !strings.EqualFold(strings.TrimSpace(e.Name()), "Disabled") {
+			modnames = append(modnames, e.Name())
+		}
+	}
+	return modnames, nil
 }
