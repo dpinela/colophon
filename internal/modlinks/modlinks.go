@@ -64,6 +64,20 @@ func EncodeManifest(m Manifest) []byte {
 	return text
 }
 
+func (m *Manifest) Merge(patch Manifest) {
+	m.Link = patch.Link
+	m.Version = patch.Version
+	if patch.Description != "" {
+		m.Description = patch.Description
+	}
+	if patch.Repository != "" {
+		m.Repository = patch.Repository
+	}
+	if patch.Dependencies != nil {
+		m.Dependencies = patch.Dependencies
+	}
+}
+
 type missingModsError []string
 
 func (err missingModsError) Error() string {

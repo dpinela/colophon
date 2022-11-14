@@ -522,43 +522,55 @@ func installedMods(modsdir string) ([]string, error) {
 }
 
 func publish(args []string) error {
-	var url, modlinksPath, name, version, desc, deps, repo string
+	var manifestPatch modlinks.Manifest
+	var modlinksPath, deps string
 
 	flags := flag.NewFlagSet("publish", flag.ExitOnError)
-	flags.StringVar(&url, "url", "", "The mod file that will be published on modlinks (required)")
+	flags.StringVar(&manifestPatch.Link.URL, "url", "", "The mod file that will be published on modlinks (required)")
 	flags.StringVar(&modlinksPath, "modlinks", "ModLinks.xml", "Path to the modlinks file")
-	flags.StringVar(&name, "name", "", "The name of the mod (will be determined from the URL if not specified)")
-	flags.StringVar(&version, "version", "", "The version of the mod (will be determined from the URL if not specified)")
-	flags.StringVar(&desc, "desc", "", "The description")
-	flags.StringVar(&deps, "deps", "", "The mod's dependencies, separated by commas")
-	flags.StringVar(&repo, "repo", "", "The URL for the mod's repository")
+	flags.StringVar(&manifestPatch.Name, "name", "", "The name of the mod (will be determined from the URL if not specified)")
+	flags.StringVar(&manifestPatch.Version, "version", "", "The version of the mod (will be determined from the URL if not specified)")
+	flags.StringVar(&manifestPatch.Description, "desc", "", "The description")
+	flags.StringVar(&deps, "deps", "", "The mod's dependencies, separated by commas ('none' to remove all dependencies when updating)")
+	flags.StringVar(&manifestPatch.Repository, "repo", "", "The URL for the mod's repository")
 	flags.Parse(args)
 
-	if url == "" {
-		return fmt.Errorf("publish %q: no mod file URL specified", name)
+	if manifestPatch.Link.URL == "" {
+		return fmt.Errorf("publish %q: no mod file URL specified", manifestPatch.Name)
 	}
-	if name == "" {
-		name = strings.TrimSuffix(path.Base(url), path.Ext(url))
+	if manifestPatch.Name == "" {
+		url := manifestPatch.Link.URL
+		manifestPatch.Name = strings.TrimSuffix(path.Base(url), path.Ext(url))
 	}
-	if name == "" {
-		return fmt.Errorf("publish %q: name could not be determined from URL", url)
+	if manifestPatch.Name == "" {
+		return fmt.Errorf("publish %q: name could not be determined from URL", manifestPatch.Link.URL)
 	}
-	if version == "" {
-		m := regexp.MustCompile(`/v(\d+(?:\.\d+)*)/`).FindStringSubmatch(url)
+	if manifestPatch.Version == "" {
+		m := regexp.MustCompile(`/v(\d+(?:\.\d+)*)/`).FindStringSubmatch(manifestPatch.Link.URL)
 		if m == nil {
-			return fmt.Errorf("publish %q: version could not be determined from URL", name)
+			return fmt.Errorf("publish %q: version could not be determined from URL", manifestPatch.Name)
 		}
-		version = m[1]
+		manifestPatch.Version = m[1]
+	}
+	manifestPatch.Version = padVersion(manifestPatch.Version)
+	switch deps {
+	case "none":
+		manifestPatch.Dependencies = make([]string, 0)
+	case "":
+		manifestPatch.Dependencies = nil
+	default:
+		manifestPatch.Dependencies = strings.Split(deps, ",")
 	}
 
 	wrap := func(err error) error {
-		return fmt.Errorf("publish %q: %w", name, err)
+		return fmt.Errorf("publish %q: %w", manifestPatch.Name, err)
 	}
 
-	sha, err := sha256OfURL(url)
+	sha, err := sha256OfURL(manifestPatch.Link.URL)
 	if err != nil {
 		return wrap(err)
 	}
+	manifestPatch.Link.SHA256 = sha
 
 	modlinksFile, err := os.OpenFile(modlinksPath, os.O_RDWR, 0)
 	if err != nil {
@@ -570,7 +582,7 @@ func publish(args []string) error {
 		return err
 	}
 	blocks := regexp.MustCompile(`(?s)<Manifest>.*?</Manifest>`).FindAllIndex(content, -1)
-	namePattern := []byte(`<Name>` + name + `</Name>`)
+	namePattern := []byte(`<Name>` + manifestPatch.Name + `</Name>`)
 	for _, bounds := range blocks {
 		blockContent := content[bounds[0]:bounds[1]]
 		if bytes.Contains(blockContent, namePattern) {
@@ -578,24 +590,13 @@ func publish(args []string) error {
 			if err != nil {
 				return err
 			}
-			m.Link.URL = url
-			m.Link.SHA256 = sha
-			m.Version = padVersion(version)
-			if desc != "" {
-				m.Description = desc
-			}
-			if repo != "" {
-				m.Repository = repo
-			}
-			if deps != "" {
-				m.Dependencies = strings.Split(deps, ",")
-			}
+			m.Merge(manifestPatch)
 			newContent := bytes.TrimLeft(modlinks.EncodeManifest(m), " ")
-			
+
 			if err := mustSeek(modlinksFile, int64(bounds[0])); err != nil {
 				return err
 			}
-			if err := modlinksFile.Truncate(int64(bounds[0]) + int64(len(newContent)) + int64(len(content) - bounds[1])); err != nil {
+			if err := modlinksFile.Truncate(int64(bounds[0]) + int64(len(newContent)) + int64(len(content)-bounds[1])); err != nil {
 				return err
 			}
 			if _, err := modlinksFile.Write(newContent); err != nil {
@@ -607,7 +608,22 @@ func publish(args []string) error {
 			return nil
 		}
 	}
-	return fmt.Errorf("publish %q: not already in modlinks", name)
+	if len(blocks) == 0 {
+		return fmt.Errorf("publish %q: cannot find insertion point for new manifest", manifestPatch.Name)
+	}
+	newContent := []byte{'\n'}
+	newContent = append(newContent, modlinks.EncodeManifest(manifestPatch)...)
+	endOfLastManifest := blocks[len(blocks)-1][1]
+	if err := mustSeek(modlinksFile, int64(endOfLastManifest)); err != nil {
+		return err
+	}
+	if _, err := modlinksFile.Write(newContent); err != nil {
+		return err
+	}
+	if _, err := modlinksFile.Write(content[endOfLastManifest:]); err != nil {
+		return err
+	}
+	return nil
 }
 
 func mustSeek(f io.Seeker, target int64) error {
