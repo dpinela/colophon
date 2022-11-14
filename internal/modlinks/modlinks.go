@@ -50,6 +50,20 @@ func Get() ([]Manifest, error) {
 	return links.Manifests, nil
 }
 
+func ParseManifest(text []byte) (Manifest, error) {
+	var m Manifest
+	err := xml.Unmarshal(text, &m)
+	return m, err
+}
+
+func EncodeManifest(m Manifest) []byte {
+	text, err := xml.MarshalIndent(m, "    ", "    ")
+	if err != nil {
+		panic(err)
+	}
+	return text
+}
+
 type missingModsError []string
 
 func (err missingModsError) Error() string {

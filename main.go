@@ -25,6 +25,7 @@ func main() {
 		fmt.Printf("       %s install modnames [...]\n", os.Args[0])
 		fmt.Printf("       %s installfile modname path-or-url", os.Args[0])
 		fmt.Printf("       %s yeet modnames [...]\n", os.Args[0])
+		fmt.Printf("       %s publish -url modfileurl -modlinks repopath [-name modname] [-version number] [-desc text] [-deps dep1,dep2,...] [-repo url]\n", os.Args[0])
 		os.Exit(2)
 	}
 	subcmd := os.Args[1]
@@ -38,6 +39,8 @@ func main() {
 		err = installfile(os.Args[2:])
 	case "yeet":
 		err = yeet(os.Args[2:])
+	case "publish":
+		err = publish(os.Args[2:])
 	default:
 		err = fmt.Errorf("unknown subcommand: %q", subcmd)
 	}
@@ -280,7 +283,7 @@ func downloadLink(localfile string, url string, expectedSHA []byte) (readCloserA
 		return nil, 0, wrap(err)
 	}
 	defer resp.Body.Close()
-	if !(resp.StatusCode >= 200 && resp.StatusCode < 300) {
+	if !isHTTPOK(resp.StatusCode) {
 		return nil, 0, fmt.Errorf("download %s: response status was %d", url, resp.StatusCode)
 	}
 	if err := os.MkdirAll(filepath.Dir(localfile), 0750); err != nil {
@@ -301,6 +304,8 @@ func downloadLink(localfile string, url string, expectedSHA []byte) (readCloserA
 	}
 	return f, size, nil
 }
+
+func isHTTPOK(code int) bool { return code >= 200 && code < 300 }
 
 const customKnightName = "Custom Knight"
 
@@ -514,4 +519,129 @@ func installedMods(modsdir string) ([]string, error) {
 		}
 	}
 	return modnames, nil
+}
+
+func publish(args []string) error {
+	var url, modlinksPath, name, version, desc, deps, repo string
+
+	flags := flag.NewFlagSet("publish", flag.ExitOnError)
+	flags.StringVar(&url, "url", "", "The mod file that will be published on modlinks (required)")
+	flags.StringVar(&modlinksPath, "modlinks", "ModLinks.xml", "Path to the modlinks file")
+	flags.StringVar(&name, "name", "", "The name of the mod (will be determined from the URL if not specified)")
+	flags.StringVar(&version, "version", "", "The version of the mod (will be determined from the URL if not specified)")
+	flags.StringVar(&desc, "desc", "", "The description")
+	flags.StringVar(&deps, "deps", "", "The mod's dependencies, separated by commas")
+	flags.StringVar(&repo, "repo", "", "The URL for the mod's repository")
+	flags.Parse(args)
+
+	if url == "" {
+		return fmt.Errorf("publish %q: no mod file URL specified", name)
+	}
+	if name == "" {
+		name = strings.TrimSuffix(path.Base(url), path.Ext(url))
+	}
+	if name == "" {
+		return fmt.Errorf("publish %q: name could not be determined from URL", url)
+	}
+	if version == "" {
+		m := regexp.MustCompile(`/v(\d+(?:\.\d+)*)/`).FindStringSubmatch(url)
+		if m == nil {
+			return fmt.Errorf("publish %q: version could not be determined from URL", name)
+		}
+		version = m[1]
+	}
+
+	wrap := func(err error) error {
+		return fmt.Errorf("publish %q: %w", name, err)
+	}
+
+	sha, err := sha256OfURL(url)
+	if err != nil {
+		return wrap(err)
+	}
+
+	modlinksFile, err := os.OpenFile(modlinksPath, os.O_RDWR, 0)
+	if err != nil {
+		return wrap(err)
+	}
+	defer modlinksFile.Close()
+	content, err := io.ReadAll(modlinksFile)
+	if err != nil {
+		return err
+	}
+	blocks := regexp.MustCompile(`(?s)<Manifest>.*?</Manifest>`).FindAllIndex(content, -1)
+	namePattern := []byte(`<Name>` + name + `</Name>`)
+	for _, bounds := range blocks {
+		blockContent := content[bounds[0]:bounds[1]]
+		if bytes.Contains(blockContent, namePattern) {
+			m, err := modlinks.ParseManifest(blockContent)
+			if err != nil {
+				return err
+			}
+			m.Link.URL = url
+			m.Link.SHA256 = sha
+			m.Version = padVersion(version)
+			if desc != "" {
+				m.Description = desc
+			}
+			if repo != "" {
+				m.Repository = repo
+			}
+			if deps != "" {
+				m.Dependencies = strings.Split(deps, ",")
+			}
+			newContent := bytes.TrimLeft(modlinks.EncodeManifest(m), " ")
+			
+			if err := mustSeek(modlinksFile, int64(bounds[0])); err != nil {
+				return err
+			}
+			if err := modlinksFile.Truncate(int64(bounds[0]) + int64(len(newContent)) + int64(len(content) - bounds[1])); err != nil {
+				return err
+			}
+			if _, err := modlinksFile.Write(newContent); err != nil {
+				return err
+			}
+			if _, err := modlinksFile.Write(content[bounds[1]:]); err != nil {
+				return err
+			}
+			return nil
+		}
+	}
+	return fmt.Errorf("publish %q: not already in modlinks", name)
+}
+
+func mustSeek(f io.Seeker, target int64) error {
+	off, err := f.Seek(target, io.SeekStart)
+	if err != nil {
+		return err
+	}
+	if off != target {
+		return fmt.Errorf("seek should have gone to offset %d, went to %d instead", target, off)
+	}
+	return nil
+}
+
+func padVersion(v string) string {
+	nums := strings.Split(v, ".")
+	for len(nums) < 4 {
+		nums = append(nums, "0")
+	}
+	return strings.Join(nums, ".")
+}
+
+func sha256OfURL(link string) (string, error) {
+	resp, err := http.Get(link)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	if !isHTTPOK(resp.StatusCode) {
+		return "", fmt.Errorf("download %s: response status was %d", link, resp.StatusCode)
+	}
+	sha := sha256.New()
+	if _, err := io.Copy(sha, resp.Body); err != nil {
+		return "", err
+	}
+	result := make([]byte, 0, sha256.Size)
+	return hex.EncodeToString(sha.Sum(result)), nil
 }
