@@ -90,13 +90,11 @@ func install(args []string) error {
 			fmt.Printf("cannot install %s: filename contains path separator\n", dl.Name)
 			continue
 		}
-		fmt.Println("Installing", dl.Name)
 		file, size, err := getModFile(cachedir, &dl)
 		if err != nil {
 			fmt.Println(err)
 			continue
 		}
-		fmt.Println("Extracting", dl.Name)
 		if err := removePreviousVersion(dl.Name, installdir); err != nil {
 			fmt.Println(err)
 			file.Close()
@@ -267,11 +265,13 @@ func getModFile(cachedir string, mod *modlinks.Manifest) (readCloserAt, int64, e
 		f.Close()
 		return nil, 0, err
 	}
+	emoji := representativeEmoji(mod.Name)
 	if !bytes.Equal(expectedSHA, sha.Sum(make([]byte, 0, sha256.Size))) {
 		f.Close()
+		fmt.Println(emoji, "Installing", mod.Name, "from", mod.Link.URL)
 		return downloadLink(cacheEntry, mod.Link.URL, expectedSHA)
 	}
-	fmt.Println("Got", mod.Name, "from cache")
+	fmt.Println(emoji, "Installing", mod.Name, "from cache")
 	return f, size, nil
 }
 
@@ -306,6 +306,41 @@ func downloadLink(localfile string, url string, expectedSHA []byte) (readCloserA
 }
 
 func isHTTPOK(code int) bool { return code >= 200 && code < 300 }
+
+type emojiSelector struct {
+	pattern *regexp.Regexp
+	emoji   string
+}
+
+var emojiMapping []emojiSelector
+
+func representativeEmoji(modName string) string {
+	if len(emojiMapping) == 0 {
+		emojiMapping = []emojiSelector{
+			{regexp.MustCompile("(?i)door"), "🚪"},
+			{regexp.MustCompile("(?i)map"), "🗺️"},
+			{regexp.MustCompile("(?i)bench"), "🪑"},
+			{regexp.MustCompile("(?i)rando"), "🎲"},
+			{regexp.MustCompile(`(?i)custom\s*knight`), "👗"},
+			{regexp.MustCompile("(?i)hkmp|sync|multiworld"), "☎️"},
+			{regexp.MustCompile("(?i)egg"), "🥚"},
+			{regexp.MustCompile("(?i)god"), "🛐"},
+			{regexp.MustCompile("(?i)curse"), "😈"},
+			{regexp.MustCompile("(?i)grimm"), "🔥"},
+			{regexp.MustCompile("(?i)stats"), "📈"},
+			{regexp.MustCompile("(?i)core"), "🛠️"},
+			{regexp.MustCompile("(?i)hue|palette"), "🎨"},
+			{regexp.MustCompile("(?i)menu"), "🛎️"},
+			{regexp.MustCompile("(?i)changer"), "🔧"},
+		}
+	}
+	for _, s := range emojiMapping {
+		if s.pattern.MatchString(modName) {
+			return s.emoji
+		}
+	}
+	return "🎁"
+}
 
 const customKnightName = "Custom Knight"
 
@@ -425,9 +460,10 @@ func writeZipFile(dest string, file *zip.File) error {
 
 func list(args []string) error {
 	flags := flag.NewFlagSet("list", flag.ExitOnError)
-	var detailed bool
+	var detailed, showIcons bool
 	var search string
 	flags.BoolVar(&detailed, "d", false, "Display detailed information about mods")
+	flags.BoolVar(&showIcons, "i", false, "Display icons")
 	flags.StringVar(&search, "s", "", "Search for mods whose name contains `term`")
 	if err := flags.Parse(args); err != nil {
 		return err
@@ -451,7 +487,11 @@ func list(args []string) error {
 	}
 	sort.Slice(manifests, func(i, j int) bool { return manifests[i].Name < manifests[j].Name })
 	for _, m := range manifests {
-		fmt.Println(m.Name)
+		if showIcons {
+			fmt.Println(representativeEmoji(m.Name), m.Name)
+		} else {
+			fmt.Println(m.Name)
+		}
 		if detailed {
 			fmt.Println("\tVersion:", m.Version)
 			fmt.Println("\tRepository:", m.Repository)
