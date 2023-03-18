@@ -12,11 +12,10 @@ To install this tool, grab a binary release, or if you have a [Go][] toolchain i
 
     $ go install github.com/dpinela/colophon/cmd/hkmod@latest
 
-Grab a binary release (or compile the program from source), then set the
-HK15PATH environment variable to the path to your Hollow Knight installation
-(the directory containing the Assembly-CSharp.dll file). The game must already
-have the [Modding API][] installed; this tool does not yet have a way of doing that
-for you.
+Then, set the HK15PATH environment variable to the path to your Hollow Knight 
+installation (the directory containing the Assembly-CSharp.dll file). The game must 
+already have the [Modding API][] installed; this tool does not yet have a way of 
+doing that for you.
 
 [Modding API]: https://github.com/hk-modding/api
 [Go]: https://go.dev
