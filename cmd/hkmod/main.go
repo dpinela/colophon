@@ -16,7 +16,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/dpinela/hkmod/internal/modlinks"
+	"github.com/dpinela/colophon/internal/modlinks"
 )
 
 func main() {
