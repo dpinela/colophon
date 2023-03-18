@@ -118,7 +118,7 @@ exactly.
 One use of this command is to install older or newer versions of mods than the ones
 on modlinks: for example
 
-    $ hkmod install Transcendence https://github.com/dpinela/Transcendence/releases/download/v1.3.5/Transcendence.zip
+    $ hkmod installfile Transcendence https://github.com/dpinela/Transcendence/releases/download/v1.3.5/Transcendence.zip
 
 installs an older version of Transcendence.
 
