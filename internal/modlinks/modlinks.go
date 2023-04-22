@@ -15,9 +15,9 @@ type Manifest struct {
 	Name         string
 	Description  string
 	Version      string
-	Repository   string
 	Link         Link
 	Dependencies []string `xml:"Dependencies>Dependency"`
+	Repository   string
 }
 
 type Link struct {
