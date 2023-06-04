@@ -130,9 +130,7 @@ as the install command, so partial matches will work when unambiguous:
     $ hkmod yeet levers
     Yeeted Randomizable Levers
 
-*Unlike* the install command, there is no special treatment for Custom Knight;
-uninstalling that mod will also uninstall all of your skins. Also, this command can 
-target any mod you have installed, regardless of source, including mods that do not
+This command can target any mod you have installed, regardless of source, including mods that do not
 exist on modlinks or were installed by a different tool.
 
 ### publish
