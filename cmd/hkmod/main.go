@@ -15,6 +15,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/dpinela/colophon/internal/modlinks"
 )
@@ -275,8 +276,19 @@ func getModFile(cachedir string, mod *modlinks.Manifest) (readCloserAt, int64, e
 	return f, size, nil
 }
 
+func isatty(f *os.File) bool {
+	info, err := f.Stat()
+	if err != nil {
+		return false
+	}
+	return info.Mode()&os.ModeCharDevice != 0
+}
+
+const ansiEraseLine = "\x1b[G\x1b[K"
+
 func downloadLink(localfile string, url string, expectedSHA []byte) (readCloserAt, int64, error) {
 	wrap := func(err error) error { return fmt.Errorf("download %s: %w", url, err) }
+
 	resp, err := http.Get(url)
 	if err != nil {
 		return nil, 0, wrap(err)
@@ -292,8 +304,21 @@ func downloadLink(localfile string, url string, expectedSHA []byte) (readCloserA
 	if err != nil {
 		return nil, 0, wrap(err)
 	}
+
 	sha := sha256.New()
-	size, err := io.Copy(f, io.TeeReader(resp.Body, sha))
+	r := io.TeeReader(resp.Body, sha)
+	if isatty(os.Stdout) {
+		defer fmt.Print(ansiEraseLine)
+		var counter byteCounter
+		counter.updatePeriod = time.Second
+		if fullSize := dataSize(resp.ContentLength); fullSize != -1 {
+			counter.update = func(n dataSize) { fmt.Printf(ansiEraseLine+"downloading: %s of %s", n, fullSize) }
+		} else {
+			counter.update = func(n dataSize) { fmt.Printf(ansiEraseLine+"downloading: %s of ???", n) }
+		}
+		r = io.TeeReader(r, &counter)
+	}
+	size, err := io.Copy(f, r)
 	if err != nil {
 		f.Close()
 		return nil, 0, wrap(err)
@@ -302,6 +327,37 @@ func downloadLink(localfile string, url string, expectedSHA []byte) (readCloserA
 		return nil, 0, fmt.Errorf("download %s: sha256 does not match manifest", url)
 	}
 	return f, size, nil
+}
+
+type byteCounter struct {
+	bytesWritten dataSize
+	lastUpdate   time.Time
+	updatePeriod time.Duration
+	update       func(dataSize)
+}
+
+func (bc *byteCounter) Write(p []byte) (int, error) {
+	bc.bytesWritten += dataSize(len(p))
+	if now := time.Now(); now.Sub(bc.lastUpdate) > bc.updatePeriod {
+		bc.lastUpdate = now
+		bc.update(bc.bytesWritten)
+	}
+	return len(p), nil
+}
+
+type dataSize int64
+
+func (n dataSize) String() string {
+	switch {
+	case n < 1_000:
+		return fmt.Sprintf("%d bytes", n)
+	case n < 1_000_000:
+		return fmt.Sprintf("%.1f kB", float64(n/1_000))
+	case n < 1_000_000_000:
+		return fmt.Sprintf("%.1f MB", float64(n/1_000_000))
+	default:
+		return fmt.Sprintf("%.1f GB", float64(n/1_000_000_000))
+	}
 }
 
 func isHTTPOK(code int) bool { return code >= 200 && code < 300 }
