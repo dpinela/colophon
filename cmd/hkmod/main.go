@@ -26,7 +26,7 @@ func main() {
 		fmt.Printf("       %s install modnames [...]\n", os.Args[0])
 		fmt.Printf("       %s installfile modname path-or-url", os.Args[0])
 		fmt.Printf("       %s yeet modnames [...]\n", os.Args[0])
-		fmt.Printf("       %s publish -url modfileurl -modlinks repopath [-name modname] [-version number] [-desc text] [-deps dep1,dep2,...] [-repo url]\n", os.Args[0])
+		fmt.Printf("       %s publish -url modfileurl -modlinks ModLinks.xml [-name modname] [-version number] [-desc text] [-deps dep1,dep2,...] [-repo url]\n", os.Args[0])
 		os.Exit(2)
 	}
 	subcmd := os.Args[1]
