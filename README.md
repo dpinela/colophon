@@ -58,6 +58,9 @@ Using the `-s` option, you can reduce the list to mods containing a particular s
     RandoSettingsManager
     ...
 
+The `-i` option reduces the list to mods that are currently installed, and also adds
+any mods you have installed that aren't listed on modlinks.
+
 The `-d` option adds more detailed information about each mod:
 
     $ hkmod list -d -s levers

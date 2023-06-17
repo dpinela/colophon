@@ -20,9 +20,11 @@ import (
 	"github.com/dpinela/colophon/internal/modlinks"
 )
 
+const pathEnvVar = "HK15PATH"
+
 func main() {
 	if len(os.Args) < 2 {
-		fmt.Printf("usage: %s list [-s search] [-d]\n", os.Args[0])
+		fmt.Printf("usage: %s list [-s search] [-i] [-d]\n", os.Args[0])
 		fmt.Printf("       %s install modnames [...]\n", os.Args[0])
 		fmt.Printf("       %s installfile modname path-or-url", os.Args[0])
 		fmt.Printf("       %s yeet modnames [...]\n", os.Args[0])
@@ -52,9 +54,9 @@ func main() {
 }
 
 func install(args []string) error {
-	installdir := os.Getenv("HK15PATH")
+	installdir := os.Getenv(pathEnvVar)
 	if installdir == "" {
-		return fmt.Errorf("HK15PATH not defined")
+		return fmt.Errorf(pathEnvVar + " not defined")
 	}
 	cachedir, err := os.UserCacheDir()
 	if err != nil {
@@ -115,9 +117,9 @@ func install(args []string) error {
 }
 
 func installfile(args []string) error {
-	installdir := os.Getenv("HK15PATH")
+	installdir := os.Getenv(pathEnvVar)
 	if installdir == "" {
-		return fmt.Errorf("HK15PATH not defined")
+		return fmt.Errorf(pathEnvVar + " not defined")
 	}
 	if len(args) < 2 {
 		return fmt.Errorf("usage: installfile modname path-or-url")
@@ -352,11 +354,11 @@ func (n dataSize) String() string {
 	case n < 1_000:
 		return fmt.Sprintf("%d bytes", n)
 	case n < 1_000_000:
-		return fmt.Sprintf("%.1f kB", float64(n/1_000))
+		return fmt.Sprintf("%.1f kB", float64(n)/1_000)
 	case n < 1_000_000_000:
-		return fmt.Sprintf("%.1f MB", float64(n/1_000_000))
+		return fmt.Sprintf("%.1f MB", float64(n)/1_000_000)
 	default:
-		return fmt.Sprintf("%.1f GB", float64(n/1_000_000_000))
+		return fmt.Sprintf("%.1f GB", float64(n)/1_000_000_000)
 	}
 }
 
@@ -481,8 +483,10 @@ func writeZipFile(dest string, file *zip.File) error {
 func list(args []string) error {
 	flags := flag.NewFlagSet("list", flag.ExitOnError)
 	var detailed bool
+	var installed bool
 	var search string
 	flags.BoolVar(&detailed, "d", false, "Display detailed information about mods")
+	flags.BoolVar(&installed, "i", false, "Show only info on installed mods")
 	flags.StringVar(&search, "s", "", "Search for mods whose name contains `term`")
 	if err := flags.Parse(args); err != nil {
 		return err
@@ -491,21 +495,59 @@ func list(args []string) error {
 	if err != nil {
 		return err
 	}
+	var modFilter filter
+	if installed {
+		installdir := os.Getenv(pathEnvVar)
+		if installdir == "" {
+			return fmt.Errorf(pathEnvVar + " not defined")
+		}
+		mods, err := installedMods(filepath.Join(installdir, "Mods"))
+		if err != nil {
+			return err
+		}
+		modSet := make(map[string]bool, len(mods))
+		for _, im := range mods {
+			modSet[im] = false
+		}
+		for _, m := range manifests {
+			if _, ok := modSet[m.Name]; ok {
+				modSet[m.Name] = true
+			}
+		}
+
+		const placeholder = "N/A"
+
+		for im, hasManifest := range modSet {
+			if !hasManifest {
+				manifests = append(manifests, modlinks.Manifest{
+					Name:         im,
+					Description:  placeholder,
+					Version:      placeholder,
+					Dependencies: []string{placeholder},
+					Repository:   placeholder,
+				})
+			}
+		}
+		modFilter = modFilter.and(func(name string) bool {
+			_, ok := modSet[name]
+			return ok
+		})
+	}
 	if search != "" {
 		pattern, err := regexp.Compile("(?i)" + regexp.QuoteMeta(search))
 		if err != nil {
 			return err
 		}
-		filtered := manifests[:0]
-		for _, m := range manifests {
-			if pattern.MatchString(m.Name) {
-				filtered = append(filtered, m)
-			}
-		}
-		manifests = filtered
+		modFilter = modFilter.and(pattern.MatchString)
 	}
-	sort.Slice(manifests, func(i, j int) bool { return manifests[i].Name < manifests[j].Name })
+	filtered := manifests[:0]
 	for _, m := range manifests {
+		if modFilter.test(m.Name) {
+			filtered = append(filtered, m)
+		}
+	}
+	sort.Slice(filtered, func(i, j int) bool { return filtered[i].Name < filtered[j].Name })
+	for _, m := range filtered {
 		fmt.Println(m.Name)
 		if detailed {
 			fmt.Println("\tVersion:", m.Version)
@@ -521,10 +563,29 @@ func list(args []string) error {
 	return nil
 }
 
+type filter func(string) bool
+
+func (f filter) and(g filter) filter {
+	if f == nil {
+		return g
+	}
+	if g == nil {
+		return f
+	}
+	return func(x string) bool { return f(x) && g(x) }
+}
+
+func (f filter) test(x string) bool {
+	if f == nil {
+		return true
+	}
+	return f(x)
+}
+
 func yeet(args []string) error {
-	installdir := os.Getenv("HK15PATH")
+	installdir := os.Getenv(pathEnvVar)
 	if installdir == "" {
-		return fmt.Errorf("HK15PATH not defined")
+		return fmt.Errorf(pathEnvVar + " not defined")
 	}
 	modsdir := filepath.Join(installdir, "Mods")
 	mods, err := installedMods(modsdir)
