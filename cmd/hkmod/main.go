@@ -20,7 +20,10 @@ import (
 	"github.com/dpinela/colophon/internal/modlinks"
 )
 
-const pathEnvVar = "HK15PATH"
+const (
+	pathEnvVar = "HK15PATH"
+	modlinksURLEnvVar = "MODLINKSURL"
+)
 
 func main() {
 	if len(os.Args) < 2 {
@@ -53,6 +56,13 @@ func main() {
 	}
 }
 
+func modlinksURL() string {
+	if u := os.Getenv(modlinksURLEnvVar); u != "" {
+		return u
+	}
+	return "https://raw.githubusercontent.com/hk-modding/modlinks/main/ModLinks.xml"
+}
+
 func install(args []string) error {
 	installdir := os.Getenv(pathEnvVar)
 	if installdir == "" {
@@ -64,7 +74,7 @@ func install(args []string) error {
 	}
 	cachedir = filepath.Join(cachedir, "hkmod")
 
-	manifests, err := modlinks.Get()
+	manifests, err := modlinks.Get(modlinksURL())
 	if err != nil {
 		return err
 	}
@@ -491,7 +501,7 @@ func list(args []string) error {
 	if err := flags.Parse(args); err != nil {
 		return err
 	}
-	manifests, err := modlinks.Get()
+	manifests, err := modlinks.Get(modlinksURL())
 	if err != nil {
 		return err
 	}

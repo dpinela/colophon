@@ -25,9 +25,7 @@ type Link struct {
 	URL    string `xml:",chardata"`
 }
 
-const modlinksURL = "https://raw.githubusercontent.com/hk-modding/modlinks/main/ModLinks.xml"
-
-func Get() ([]Manifest, error) {
+func Get(modlinksURL string) ([]Manifest, error) {
 	wrap := func(err error) error { return fmt.Errorf("get modlinks: %w", err) }
 	resp, err := http.Get(modlinksURL)
 	if err != nil {
