@@ -16,8 +16,13 @@ type Manifest struct {
 	Description  string
 	Version      string
 	Link         Link
-	Dependencies []string `xml:"Dependencies>Dependency"`
+	OSLinks      OSLinkSet `xml:"Links,omitempty"`
+	Dependencies []string  `xml:"Dependencies>Dependency"`
 	Repository   string
+}
+
+type OSLinkSet struct {
+	Windows, Mac, Linux Link
 }
 
 type Link struct {
@@ -42,10 +47,21 @@ func Get(modlinksURL string) ([]Manifest, error) {
 	// The Link and Repository fields have some extra indentation inside them; discard it.
 	for i := range links.Manifests {
 		m := &links.Manifests[i]
-		m.Link.URL = strings.TrimSpace(m.Link.URL)
-		m.Repository = strings.TrimSpace(m.Repository)
+		trim(
+			&m.Link.URL,
+			&m.OSLinks.Windows.URL,
+			&m.OSLinks.Linux.URL,
+			&m.OSLinks.Mac.URL,
+			&m.Repository,
+		)
 	}
 	return links.Manifests, nil
+}
+
+func trim(ps ...*string) {
+	for _, p := range ps {
+		*p = strings.TrimSpace(*p)
+	}
 }
 
 func ParseManifest(text []byte) (Manifest, error) {

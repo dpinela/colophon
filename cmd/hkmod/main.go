@@ -13,6 +13,7 @@ import (
 	"path"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"sort"
 	"strings"
 	"time"
@@ -21,7 +22,7 @@ import (
 )
 
 const (
-	pathEnvVar = "HK15PATH"
+	pathEnvVar        = "HK15PATH"
 	modlinksURLEnvVar = "MODLINKSURL"
 )
 
@@ -103,24 +104,24 @@ func install(args []string) error {
 			fmt.Printf("cannot install %s: filename contains path separator\n", dl.Name)
 			continue
 		}
-		file, size, err := getModFile(cachedir, &dl)
+		file, err := getModFile(cachedir, &dl)
 		if err != nil {
-			fmt.Println(err)
+			fmt.Printf("cannot install %s: %v\n", dl.Name, err)
 			continue
 		}
 		if err := removePreviousVersion(dl.Name, installdir); err != nil {
-			fmt.Println(err)
+			fmt.Printf("cannot install %s: %v\n", dl.Name, err)
 			file.Close()
 			continue
 		}
-		if path.Ext(dl.Link.URL) == ".zip" {
-			err = extractModZip(file, size, dl.Name, installdir)
+		if file.IsZIP {
+			err = extractModZip(file, file.Size, dl.Name, installdir)
 		} else {
 			err = extractModDLL(file, path.Base(dl.Link.URL), dl.Name, installdir)
 		}
 		file.Close()
 		if err != nil {
-			fmt.Println(err)
+			fmt.Printf("cannot install %s: %v\n", dl.Name, err)
 		}
 	}
 	return nil
@@ -259,33 +260,64 @@ type readCloserAt interface {
 	io.ReadSeekCloser
 }
 
-func getModFile(cachedir string, mod *modlinks.Manifest) (readCloserAt, int64, error) {
-	expectedSHA, err := hex.DecodeString(mod.Link.SHA256)
-	if err != nil {
-		return nil, 0, err
+func selectLink(mod *modlinks.Manifest) (modlinks.Link, error) {
+	if mod.Link.SHA256 != "" {
+		return mod.Link, nil
 	}
-	cacheEntry := filepath.Join(cachedir, mod.Name+path.Ext(mod.Link.URL))
+	var osLink modlinks.Link
+	switch runtime.GOOS {
+	case "windows":
+		osLink = mod.OSLinks.Windows
+	case "darwin":
+		osLink = mod.OSLinks.Mac
+	case "linux":
+		osLink = mod.OSLinks.Linux
+	}
+	var err error
+	if osLink.SHA256 == "" {
+		err = fmt.Errorf("unsupported OS: %s", runtime.GOOS)
+	}
+	return osLink, err
+}
+
+type modFile struct {
+	*os.File
+	Size  int64
+	IsZIP bool
+}
+
+func getModFile(cachedir string, mod *modlinks.Manifest) (*modFile, error) {
+	link, err := selectLink(mod)
+	if err != nil {
+		return nil, err
+	}
+	expectedSHA, err := hex.DecodeString(link.SHA256)
+	if err != nil {
+		return nil, err
+	}
+	ext := path.Ext(link.URL)
+	cacheEntry := filepath.Join(cachedir, mod.Name+ext)
 	f, err := os.Open(cacheEntry)
 	if os.IsNotExist(err) {
-		fmt.Println("=> Installing", mod.Name, "from", mod.Link.URL)
-		return downloadLink(cacheEntry, mod.Link.URL, expectedSHA)
+		fmt.Println("=> Installing", mod.Name, "from", link.URL)
+		return downloadLink(cacheEntry, link.URL, expectedSHA)
 	}
 	if err != nil {
-		return nil, 0, err
+		return nil, err
 	}
 	sha := sha256.New()
 	size, err := io.Copy(sha, f)
 	if err != nil {
 		f.Close()
-		return nil, 0, err
+		return nil, err
 	}
 	if !bytes.Equal(expectedSHA, sha.Sum(make([]byte, 0, sha256.Size))) {
 		f.Close()
-		fmt.Println("=> Installing", mod.Name, "from", mod.Link.URL)
-		return downloadLink(cacheEntry, mod.Link.URL, expectedSHA)
+		fmt.Println("=> Installing", mod.Name, "from", link.URL)
+		return downloadLink(cacheEntry, link.URL, expectedSHA)
 	}
 	fmt.Println("=> Installing", mod.Name, "from cache")
-	return f, size, nil
+	return &modFile{File: f, Size: size, IsZIP: ext == ".zip"}, nil
 }
 
 func isatty(f *os.File) bool {
@@ -298,23 +330,23 @@ func isatty(f *os.File) bool {
 
 const ansiEraseLine = "\x1b[G\x1b[K"
 
-func downloadLink(localfile string, url string, expectedSHA []byte) (readCloserAt, int64, error) {
+func downloadLink(localfile string, url string, expectedSHA []byte) (*modFile, error) {
 	wrap := func(err error) error { return fmt.Errorf("download %s: %w", url, err) }
 
 	resp, err := http.Get(url)
 	if err != nil {
-		return nil, 0, wrap(err)
+		return nil, wrap(err)
 	}
 	defer resp.Body.Close()
 	if !isHTTPOK(resp.StatusCode) {
-		return nil, 0, fmt.Errorf("download %s: response status was %d", url, resp.StatusCode)
+		return nil, fmt.Errorf("download %s: response status was %d", url, resp.StatusCode)
 	}
 	if err := os.MkdirAll(filepath.Dir(localfile), 0750); err != nil {
-		return nil, 0, wrap(err)
+		return nil, wrap(err)
 	}
 	f, err := os.Create(localfile)
 	if err != nil {
-		return nil, 0, wrap(err)
+		return nil, wrap(err)
 	}
 
 	sha := sha256.New()
@@ -333,12 +365,12 @@ func downloadLink(localfile string, url string, expectedSHA []byte) (readCloserA
 	size, err := io.Copy(f, r)
 	if err != nil {
 		f.Close()
-		return nil, 0, wrap(err)
+		return nil, wrap(err)
 	}
 	if !bytes.Equal(sha.Sum(make([]byte, 0, sha256.Size)), expectedSHA) {
-		return nil, 0, fmt.Errorf("download %s: sha256 does not match manifest", url)
+		return nil, fmt.Errorf("download %s: sha256 does not match manifest", url)
 	}
-	return f, size, nil
+	return &modFile{File: f, Size: size, IsZIP: path.Ext(url) == ".zip"}, nil
 }
 
 type byteCounter struct {
