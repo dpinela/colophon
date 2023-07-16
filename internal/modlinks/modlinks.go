@@ -16,8 +16,8 @@ type Manifest struct {
 	Description  string
 	Version      string
 	Link         Link
-	OSLinks      OSLinkSet `xml:"Links,omitempty"`
-	Dependencies []string  `xml:"Dependencies>Dependency"`
+	OSLinks      *OSLinkSet `xml:"Links,omitempty"`
+	Dependencies []string   `xml:"Dependencies>Dependency"`
 	Repository   string
 }
 

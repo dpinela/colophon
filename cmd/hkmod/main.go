@@ -264,6 +264,9 @@ func selectLink(mod *modlinks.Manifest) (modlinks.Link, error) {
 	if mod.Link.SHA256 != "" {
 		return mod.Link, nil
 	}
+	if mod.OSLinks == nil {
+		return modlinks.Link{}, fmt.Errorf("no general or platform-specific link specified")
+	}
 	var osLink modlinks.Link
 	switch runtime.GOOS {
 	case "windows":
