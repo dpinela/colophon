@@ -47,21 +47,15 @@ func Get(modlinksURL string) ([]Manifest, error) {
 	// The Link and Repository fields have some extra indentation inside them; discard it.
 	for i := range links.Manifests {
 		m := &links.Manifests[i]
-		trim(
-			&m.Link.URL,
-			&m.OSLinks.Windows.URL,
-			&m.OSLinks.Linux.URL,
-			&m.OSLinks.Mac.URL,
-			&m.Repository,
-		)
+		m.Link.URL = strings.TrimSpace(m.Link.URL)
+		m.Repository = strings.TrimSpace(m.Repository)
+		if ol := m.OSLinks; ol != nil {
+			ol.Windows.URL = strings.TrimSpace(ol.Windows.URL)
+			ol.Linux.URL = strings.TrimSpace(ol.Linux.URL)
+			ol.Mac.URL = strings.TrimSpace(ol.Mac.URL)
+		}
 	}
 	return links.Manifests, nil
-}
-
-func trim(ps ...*string) {
-	for _, p := range ps {
-		*p = strings.TrimSpace(*p)
-	}
 }
 
 func ParseManifest(text []byte) (Manifest, error) {
